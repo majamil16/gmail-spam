@@ -1,5 +1,9 @@
+from gmail_spam.utils.get_logger import get_logger
+from gmail_spam.constants import LOG_DIR
 # for AWS
 import boto3
+from botocore.exceptions import ClientError
+
 # for dealing w/email
 import imaplib2 #imaplib - use imaplib2 because imaplib gave an error when trying to retrieve all Inbox messages (too many emails)
 # imaplib._MAXLINE = 400000
@@ -11,13 +15,15 @@ import email
 from email.header import Header, decode_header, make_header
 from email.policy import default
 from email.message import EmailMessage
-
 import uuid
 
 # for dealing w/env variables
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+# init logger
+lgr = get_logger( LOG_DIR, 'gmail_spam.lambda') # logger name is  meaning root
 
 # Load environment variables
 EMAIL, PASSWORD = os.getenv('EMAIL'), os.getenv('GMAIL_APP_PASSWORD')
@@ -42,7 +48,7 @@ def get_gmail(verbose=False):
   return mail
 
 def get_inbox(mail, verbose=False):
-  # select the Spam mailbox
+  # select the Inbox mailbox
   mail.select('Inbox')
   _, inbox_msgnums  = mail.search(None, 'ALL')
   
@@ -57,7 +63,7 @@ def get_inbox(mail, verbose=False):
 
     inbox_emails.append(data)
     i += 1
-    if i >=10 : 
+    if i >=10 and os.getenv('IS_TEST').upper() =='TRUE': 
       break
 
   return inbox_emails
@@ -80,12 +86,12 @@ def get_spam(mail, verbose=False):
 
     spam_emails.append(data)
     i += 1
-    if i >=10 : 
+    if i >=16 and os.getenv('IS_TEST').upper() =='TRUE': 
       break
 
   return spam_emails
 
-def extract_msg_contents(messages, verbose=False):
+def extract_msg_contents(messages, label, verbose=False,  format='batch'):
   """
   Extract only the text content of the message.
   
@@ -100,10 +106,6 @@ def extract_msg_contents(messages, verbose=False):
         my_msg = email.message_from_bytes((response_part[1]), policy=default)
 
         print('=====================')
-        # subj = make_header(decode_header(my_msg['subject']))
-        # sender = make_header(decode_header(my_msg['Sender']))
-        # print(f"subj : {subj}")
-        # print(f"from : {sender}")
         if verbose: 
           print(f"subj : {my_msg['subject']}, {type(my_msg['subject'])}")
           print(f"from : {my_msg['from']}, {type(my_msg['Sender'])}")
@@ -124,33 +126,37 @@ def extract_msg_contents(messages, verbose=False):
           'body' : body,
           'subject' : my_msg['subject'],
           'sender' : sender_email,
-          'sender_name' : sender_name
+          'sender_name' : sender_name,
+          'label' : label
         }
 
-
-        # formatted for dynamodb
-        # ddb_msg_obj = {
-        #   "M" : {k: {"S": v} for k, v in msg_obj.items()}
-        # }
         msg_id = str(uuid.uuid4())
-
-        ddb_msg_obj = {
-         k: {"S": v} for k, v in msg_obj.items()
-        }
-        ddb_msg_obj['id'] = {'S':msg_id}
-        print(ddb_msg_obj)
-        msg_objs.append(msg_obj)
+        if format == 'dynamo':
+          ddb_msg_obj = {
+           k: {"S": v} for k, v in msg_obj.items()
+          }
+          ddb_msg_obj['id'] = {'S':msg_id}
+          print(ddb_msg_obj)
+          msg_objs.append(ddb_msg_obj)
+        elif format=='batch':
+          msg_obj['id'] = msg_id
+          print(msg_obj)
+          msg_objs.append(msg_obj)
 
   return msg_objs
 
 
 def insert_dynamodb(dynamodb, messages):
-  table = dynamodb.Table(os.getenv('TABLE'))
-  with table.batch_writer() as batch:
-    for item in messages:
-        batch.put_item(
-            Item=item)
-
+  try : 
+    table = dynamodb.Table(os.getenv('TABLE'))
+    with table.batch_writer() as batch:
+      for item in messages:
+          batch.put_item(
+              Item=item)
+    lgr.info("Loaded data into table %s.", table.name)
+  except ClientError:
+        lgr.exception("Couldn't load data into table %s.", table.name)
+        raise
 
 
 def lambda_handler(event, context):
@@ -158,22 +164,22 @@ def lambda_handler(event, context):
   Run our lambda code. This lambda will mainly be invoked manually, not via trigger. 
   Need to configure a test Event
   """
+  print("In test: " + os.getenv('IS_TEST').upper() =='TRUE') 
   mail = get_gmail()
   spam = get_spam(mail)
-  inbox = get_inbox(mail, verbose=True)
-
-  spam_messages = extract_msg_contents(spam)
-  insert_dynamodb(dynamodb, spam_messages)
-
-  inbox_messages = extract_msg_contents(spam)
-  insert_dynamodb(dynamodb, inbox_messages)
+  inbox = get_inbox(mail)
   
-  # message = 'Hello {} {}!'.format(event['first_name'], event['last_name'])  
-  # return( { 
-  #     'message' : message
-  # })
-
-
+  print("Getting spam")
+  spam_messages = extract_msg_contents(spam, label='spam', verbose=True)
+  print("Inserting spam")
+  insert_dynamodb(dynamodb, spam_messages)
+  print("Inserted spam")
+  
+  print("Getting inbox")
+  inbox_messages = extract_msg_contents(inbox, label='inbox')
+  print("Inserting inbox")
+  insert_dynamodb(dynamodb, inbox_messages)
+  print("Inserted inbox")
 
 def main():
   # event = {

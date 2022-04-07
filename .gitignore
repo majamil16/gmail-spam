@@ -158,3 +158,6 @@ dmypy.json
 cython_debug/
 
 .vscode/
+
+# Logs 
+logs/
