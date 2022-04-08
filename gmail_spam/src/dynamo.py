@@ -57,12 +57,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--create', action='store_true')
     parser.add_argument('--drop', action='store_true')
-    parser.add_argument('--check', action='store_true')
+    parser.add_argument('--status', action='store_true')
     args = parser.parse_args()
 
     client = Dynamo()
     if len(sys.argv) != 2: # we want 2 args (the 2nd is the flag)
-        print('Flags must be exactly ONE OF : --create, --drop, --check')
+        print('Flags must be exactly ONE OF : --create, --drop, --status')
         
     elif args.create and args.drop:
         print('both')
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     elif args.drop:
         client.drop_ddb_table()
         print("Table status: dropped" )
-    elif args.check:
+    elif args.status:
         status = client.check_table_status()
         print(status)
 
