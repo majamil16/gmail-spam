@@ -57,9 +57,9 @@ def get_inbox(mail, verbose=False):
   i=0 # fr testing only
   for num in inbox_msgnums[0].split() : 
     _, data = mail.fetch(num, '(RFC822)')
+    print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
     if verbose : 
-      if verbose: print(num)
-      print('Message %s\n%s\n' % (num, data[0][1]))
+      lgr.info('Message %s\n%s\n' % (num, data[0][1]))
 
     inbox_emails.append(data)
     i += 1
@@ -79,10 +79,10 @@ def get_spam(mail, verbose=False):
 
   i=0 # fr testing only
   for num in spam_msgnums[0].split() : 
-    if verbose: print(num)
     # for num in data[0].split():
     _, data = mail.fetch(num, '(RFC822)')
-    if verbose : print('Message %s\n%s\n' % (num, data[0][1]))
+    if verbose : 
+      lgr.info('Message %s\n%s\n' % (num, data[0][1]))
 
     spam_emails.append(data)
     i += 1
@@ -164,7 +164,7 @@ def lambda_handler(event, context):
   Run our lambda code. This lambda will mainly be invoked manually, not via trigger. 
   Need to configure a test Event
   """
-  print("In test: " + os.getenv('IS_TEST').upper() =='TRUE') 
+  print(f"In test: {os.getenv('IS_TEST').upper() =='TRUE'}" ) 
   mail = get_gmail()
   spam = get_spam(mail)
   inbox = get_inbox(mail)
