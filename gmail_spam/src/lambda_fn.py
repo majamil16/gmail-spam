@@ -59,7 +59,7 @@ def get_inbox(mail, verbose=False):
     _, data = mail.fetch(num, '(RFC822)')
     print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
     if verbose : 
-      lgr.info('Message %s\n%s\n' % (num, data[0][1]))
+      print('Message %s\n%s\n' % (num, data[0][1]))
 
     inbox_emails.append(data)
     i += 1
@@ -67,6 +67,44 @@ def get_inbox(mail, verbose=False):
       break
 
   return inbox_emails
+
+def get_inbox_gen(mail, verbose=False, batch_size=10):
+  """
+  batch generator version of get_inbox.
+  returns list of batch_size emails
+  """
+  mail.select('Inbox')
+  _, inbox_msgnums  = mail.search(None, 'ALL')
+  
+  i=0# fr testing only
+  batch = [] # init the batch to return
+  batch_idx = 0
+  indices = inbox_msgnums[0].split()
+  n_batches = len(indices) / batch_size
+  for idx in indices : 
+    print()
+    _, data = mail.fetch(idx, '(RFC822)')
+    if not data[0]: 
+      print(data)
+      print('no data')
+      return None
+    # print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
+    if verbose : 
+      print('Message %s\n%s\n' % (idx, data[0][1]))
+
+    batch.append(data) # append this email to the batch
+    # yield data
+    if len(batch) == batch_size :
+      yield batch
+      lgr.info('Batch %i of %i\n' % (batch_idx, n_batches))
+      batch_idx += 1
+      batch = [] # init the batch to return
+
+    i += 1
+    if i >=10 and os.getenv('IS_TEST').upper() =='TRUE': 
+      break
+
+  # return inbox_emails
 
   
 
@@ -82,7 +120,7 @@ def get_spam(mail, verbose=False):
     # for num in data[0].split():
     _, data = mail.fetch(num, '(RFC822)')
     if verbose : 
-      lgr.info('Message %s\n%s\n' % (num, data[0][1]))
+      print('Message %s\n%s\n' % (num, data[0][1]))
 
     spam_emails.append(data)
     i += 1
@@ -153,10 +191,19 @@ def insert_dynamodb(dynamodb, messages):
       for item in messages:
           batch.put_item(
               Item=item)
-    lgr.info("Loaded data into table %s.", table.name)
+    lgr.info("Loaded %i records into table %s.",len(messages), table.name)
   except ClientError:
         lgr.exception("Couldn't load data into table %s.", table.name)
         raise
+
+def batch_gen(batch_size, dataset):
+  """
+  Get batches of emails to insert at a time.
+  """
+  pass
+
+# for batch in gen... <- in my case : this will be for batch in gen_batch
+#   do_something_with(batch) <-- insert batch
 
 
 def lambda_handler(event, context):
@@ -166,26 +213,29 @@ def lambda_handler(event, context):
   """
   print(f"In test: {os.getenv('IS_TEST').upper() =='TRUE'}" ) 
   mail = get_gmail()
-  spam = get_spam(mail)
-  inbox = get_inbox(mail)
+  # spam = get_spam(mail)
+  # inbox = get_inbox(mail, verbose=True)
+
+  for batch in get_inbox_gen(mail, batch_size=3):
+    print(len(batch)) 
   
-  print("Getting spam")
-  spam_messages = extract_msg_contents(spam, label='spam', verbose=True)
-  print("Inserting spam")
-  insert_dynamodb(dynamodb, spam_messages)
-  print("Inserted spam")
+  # print("Getting spam")
+  # spam_messages = extract_msg_contents(spam, label='spam', verbose=True)
+
+  # print("Inserting spam")
+  # insert_dynamodb(dynamodb, spam_messages)
+  # print("Inserted spam")
   
-  print("Getting inbox")
-  inbox_messages = extract_msg_contents(inbox, label='inbox')
-  print("Inserting inbox")
-  insert_dynamodb(dynamodb, inbox_messages)
-  print("Inserted inbox")
+    print("Getting inbox")
+    inbox_messages_batch = extract_msg_contents(batch, label='inbox') # the first batch of inbox messages
+
+    print("Inserting inbox")
+    insert_dynamodb(dynamodb, inbox_messages_batch)
+
+  # print("Inserted inbox")
+
 
 def main():
-  # event = {
-  #   'first_name' : "Test",
-  #   'last_name' : "Event"
-  # }
   lambda_handler(None, None)
 
 if __name__ == '__main__':
