@@ -1,242 +1,254 @@
+# for dealing w/env variables
+import os
+from shutil import ExecError
+from dotenv import load_dotenv
+
+load_dotenv()
+
+IS_TEST = os.getenv('IS_TEST').upper() =='TRUE'
+
 from gmail_spam.utils.get_logger import get_logger
 from gmail_spam.constants import LOG_DIR
+
 # for AWS
 import boto3
 from botocore.exceptions import ClientError
 
 # for dealing w/email
-import imaplib2 #imaplib - use imaplib2 because imaplib gave an error when trying to retrieve all Inbox messages (too many emails)
-# imaplib._MAXLINE = 400000
+import imaplib2  # imaplib - use imaplib2 because imaplib gave an error when trying to retrieve all Inbox messages (too many emails)
 
 # for parsing the emails
 import email
-# from email import policy
 
-from email.header import Header, decode_header, make_header
 from email.policy import default
-from email.message import EmailMessage
 import uuid
 
-# for dealing w/env variables
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
 # init logger
-lgr = get_logger( LOG_DIR, 'gmail_spam.lambda') # logger name is  meaning root
+lgr = get_logger(LOG_DIR, "gmail_spam.lambda")  # logger name is  meaning root
 
 # Load environment variables
-EMAIL, PASSWORD = os.getenv('EMAIL'), os.getenv('GMAIL_APP_PASSWORD')
+EMAIL, PASSWORD = os.getenv("EMAIL"), os.getenv("GMAIL_APP_PASSWORD")
 # Gmail IMAP url
-IMAP_URL = 'imap.gmail.com'
+IMAP_URL = "imap.gmail.com"
 
 # initialize dynamodb object
-dynamodb = boto3.resource('dynamodb', 'us-east-1')
+dynamodb = boto3.resource("dynamodb", "us-east-1")
 
 
 def get_gmail(verbose=False):
-  # Log into Gmail inbox
-  mail = imaplib2.IMAP4_SSL(IMAP_URL)
-  mail.login(EMAIL, PASSWORD)
-  _, mailboxes = mail.list()
-  # print the mailbox names
-  if verbose:
-    for i in mailboxes:
-      l = i.decode().split(' "/" ')
-      print(l[0] + " = " + l[1])
+    # Log into Gmail inbox
+    mail = imaplib2.IMAP4_SSL(IMAP_URL)
+    mail.login(EMAIL, PASSWORD)
+    _, mailboxes = mail.list()
+    # print the mailbox names
+    if verbose:
+        for i in mailboxes:
+            l = i.decode().split(' "/" ')
+            print(l[0] + " = " + l[1])
 
-  return mail
+    return mail
+
 
 def get_inbox(mail, verbose=False):
-  # select the Inbox mailbox
-  mail.select('Inbox')
-  _, inbox_msgnums  = mail.search(None, 'ALL')
-  
-  inbox_emails = []
+    # select the Inbox mailbox
+    mail.select("Inbox")
+    _, inbox_msgnums = mail.search(None, "ALL")
 
-  i=0 # fr testing only
-  for num in inbox_msgnums[0].split() : 
-    _, data = mail.fetch(num, '(RFC822)')
-    print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
-    if verbose : 
-      print('Message %s\n%s\n' % (num, data[0][1]))
+    inbox_emails = []
 
-    inbox_emails.append(data)
-    i += 1
-    if i >=10 and os.getenv('IS_TEST').upper() =='TRUE': 
-      break
+    i = 0  # fr testing only
+    for num in inbox_msgnums[0].split():
+        _, data = mail.fetch(num, "(RFC822)")
+        print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
+        if verbose:
+            print("Message %s\n%s\n" % (num, data[0][1]))
 
-  return inbox_emails
+        inbox_emails.append(data)
+        i += 1
+        if i >= 10 and IS_TEST:
+            break
+
+    return inbox_emails
+
 
 def get_inbox_gen(mail, verbose=False, batch_size=10):
-  """
-  batch generator version of get_inbox.
-  returns list of batch_size emails
-  """
-  mail.select('Inbox')
-  _, inbox_msgnums  = mail.search(None, 'ALL')
-  
-  i=0# fr testing only
-  batch = [] # init the batch to return
-  batch_idx = 0
-  indices = inbox_msgnums[0].split()
-  n_batches = len(indices) / batch_size
-  for idx in indices : 
-    print()
-    _, data = mail.fetch(idx, '(RFC822)')
-    if not data[0]: 
-      print(data)
-      print('no data')
-      return None
-    # print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
-    if verbose : 
-      print('Message %s\n%s\n' % (idx, data[0][1]))
+    """
+    batch generator version of get_inbox.
+    returns list of batch_size emails
+    """
+    mail.select("Inbox")
+    _, inbox_msgnums = mail.search(None, "ALL")
 
-    batch.append(data) # append this email to the batch
-    # yield data
-    if len(batch) == batch_size :
-      yield batch
-      lgr.info('Batch %i of %i\n' % (batch_idx, n_batches))
-      batch_idx += 1
-      batch = [] # init the batch to return
+    i = 0  # fr testing only
+    batch = []  # init the batch to return
+    batch_idx = 0
+    indices = inbox_msgnums[0].split()
+    n_batches = len(indices) / batch_size
+    for idx in indices:
+        print(f"{i} of {len(indices)}")
+        _, data = mail.fetch(idx, "(RFC822)")
+        if not data[0]:
+            print(data)
+            print("no data")
+            return None
+        # print(f"{len(inbox_msgnums[0].split())} Inbox messages retrieved")
+        if verbose:
+            print("Message %s\n%s\n" % (idx, data[0][1]))
 
-    i += 1
-    if i >=10 and os.getenv('IS_TEST').upper() =='TRUE': 
-      break
+        batch.append(data)  # append this email to the batch
+        # yield data
+        if len(batch) == batch_size:
+            yield batch
+            lgr.info("Batch %i of %i\n" % (batch_idx, n_batches))
+            batch_idx += 1
+            batch = []  # init the batch to return
 
-  # return inbox_emails
+        i += 1
+        if i >= 10 and IS_TEST:
+            break
 
-  
+    # return inbox_emails
+
 
 def get_spam(mail, verbose=False):
-  # select the Spam mailbox
-  mail.select('[Gmail]/Spam')
-  _, spam_msgnums  = mail.search(None, 'ALL')
-  
-  spam_emails = []
+    # select the Spam mailbox
+    mail.select("[Gmail]/Spam")
+    _, spam_msgnums = mail.search(None, "ALL")
 
-  i=0 # fr testing only
-  for num in spam_msgnums[0].split() : 
-    # for num in data[0].split():
-    _, data = mail.fetch(num, '(RFC822)')
-    if verbose : 
-      print('Message %s\n%s\n' % (num, data[0][1]))
+    spam_emails = []
 
-    spam_emails.append(data)
-    i += 1
-    if i >=16 and os.getenv('IS_TEST').upper() =='TRUE': 
-      break
+    i = 0  # fr testing only
+    for num in spam_msgnums[0].split():
+        # for num in data[0].split():
+        _, data = mail.fetch(num, "(RFC822)")
+        if verbose:
+            print("Message %s\n%s\n" % (num, data[0][1]))
 
-  return spam_emails
+        spam_emails.append(data)
+        i += 1
+        if i >= 10 and IS_TEST:
+            break
 
-def extract_msg_contents(messages, label, verbose=False,  format='batch'):
-  """
-  Extract only the text content of the message.
-  
-  Pass in the list of spam emails or inbox emails.
-  """
-  msg_objs = []
-  print("MESSAGES:", len(messages))
-  for msg in messages[::-1]:  
-    for response_part in msg : 
-      if type(response_part) is tuple : 
-        # continue
-        my_msg = email.message_from_bytes((response_part[1]), policy=default)
+    return spam_emails
 
-        print('=====================')
-        if verbose: 
-          print(f"subj : {my_msg['subject']}, {type(my_msg['subject'])}")
-          print(f"from : {my_msg['from']}, {type(my_msg['Sender'])}")
-          print("body : ")
-        body = ""
-        for part in my_msg.walk():
-          #print(part.get_content_type())
-          if part.get_content_type() == 'text/plain' : 
-            # print("payload")
-            body = part.get_payload().strip()
-            if verbose: print(body)
-        
-        sender_name, sender_email = my_msg['from'].split('<')
-        sender_name = sender_name.strip()
-        sender_email = sender_email.strip('>')
 
-        msg_obj = {
-          'body' : body,
-          'subject' : my_msg['subject'],
-          'sender' : sender_email,
-          'sender_name' : sender_name,
-          'label' : label
-        }
+def extract_msg_contents(messages, label, verbose=False, format="batch"):
+    """
+    Extract only the text content of the message.
 
-        msg_id = str(uuid.uuid4())
-        if format == 'dynamo':
-          ddb_msg_obj = {
-           k: {"S": v} for k, v in msg_obj.items()
-          }
-          ddb_msg_obj['id'] = {'S':msg_id}
-          print(ddb_msg_obj)
-          msg_objs.append(ddb_msg_obj)
-        elif format=='batch':
-          msg_obj['id'] = msg_id
-          print(msg_obj)
-          msg_objs.append(msg_obj)
+    Pass in the list of spam emails or inbox emails.
+    """
+    msg_objs = []
+    print("MESSAGES:", len(messages))
+    for msg in messages[::-1]:
+        for response_part in msg:
+            if type(response_part) is tuple:
+                # continue
+                my_msg = email.message_from_bytes((response_part[1]), policy=default)
 
-  return msg_objs
+                print("=====================")
+                if verbose:
+                    print(f"subj : {my_msg['subject']}, {type(my_msg['subject'])}")
+                    print(f"from : {my_msg['from']}, {type(my_msg['Sender'])}")
+                    print("body : ")
+                body = ""
+                for part in my_msg.walk():
+                    # print(part.get_content_type())
+                    if part.get_content_type() == "text/plain":
+                        # print("payload")
+                        body = part.get_payload(decode=True).strip() # add decode to parse mime content
+                        if verbose:
+                            print(body)
+                try : 
+                  sender_name, sender_email = my_msg["from"].split("<")
+                  sender_name = sender_name.strip()
+                  sender_email = sender_email.strip(">")
+
+                  msg_obj = {
+                      "body": body,
+                      "subject": my_msg["subject"],
+                      "sender": sender_email,
+                      "sender_name": sender_name,
+                      "label": label,
+                  }
+
+                  msg_id = str(uuid.uuid4())
+                  if format == "dynamo":
+                      ddb_msg_obj = {k: {"S": v} for k, v in msg_obj.items()}
+                      ddb_msg_obj["id"] = {"S": msg_id}
+                      print(ddb_msg_obj)
+                      msg_objs.append(ddb_msg_obj)
+                  elif format == "batch":
+                      msg_obj["id"] = msg_id
+                      print(msg_obj)
+                      msg_objs.append(msg_obj)
+                except Exception as e:
+                  print(e)
+    return msg_objs
 
 
 def insert_dynamodb(dynamodb, messages):
-  try : 
-    table = dynamodb.Table(os.getenv('TABLE'))
-    with table.batch_writer() as batch:
-      for item in messages:
-          batch.put_item(
-              Item=item)
-    lgr.info("Loaded %i records into table %s.",len(messages), table.name)
-  except ClientError:
+    try:
+        table = dynamodb.Table(os.getenv("TABLE"))
+        with table.batch_writer() as batch:
+            for item in messages:
+                batch.put_item(Item=item)
+        lgr.info("Loaded %i records into table %s.", len(messages), table.name)
+    except ClientError:
         lgr.exception("Couldn't load data into table %s.", table.name)
         raise
 
+
 def batch_gen(batch_size, dataset):
-  """
-  Get batches of emails to insert at a time.
-  """
-  pass
+    """
+    Get batches of emails to insert at a time.
+    """
+    pass
+
 
 # for batch in gen... <- in my case : this will be for batch in gen_batch
 #   do_something_with(batch) <-- insert batch
 
 
 def lambda_handler(event, context):
-  """
-  Run our lambda code. This lambda will mainly be invoked manually, not via trigger. 
-  Need to configure a test Event
-  """
-  print(f"In test: {os.getenv('IS_TEST').upper() =='TRUE'}" ) 
-  mail = get_gmail()
-  # spam = get_spam(mail)
-  # inbox = get_inbox(mail, verbose=True)
+    """
+    Run our lambda code. This lambda will mainly be invoked manually, not via trigger.
+    Need to configure a test Event
+    """
+    if event or event['env'] == 'TEST' : 
+      print('Event :')
+      print(event)
+      return
+        # os.environ['IS_TEST'] = 'true'
+    print(f"In test: {IS_TEST}")
+    mail = get_gmail()
+    # spam = get_spam(mail)
+    # inbox = get_inbox(mail, verbose=True)
 
-  for batch in get_inbox_gen(mail, batch_size=3):
-    print(len(batch)) 
-  
-  # print("Getting spam")
-  # spam_messages = extract_msg_contents(spam, label='spam', verbose=True)
+    for batch in get_inbox_gen(mail, batch_size=100):
+        print(len(batch))
 
-  # print("Inserting spam")
-  # insert_dynamodb(dynamodb, spam_messages)
-  # print("Inserted spam")
-  
-    print("Getting inbox")
-    inbox_messages_batch = extract_msg_contents(batch, label='inbox') # the first batch of inbox messages
+        # print("Getting spam")
+        # spam_messages = extract_msg_contents(spam, label='spam', verbose=True)
 
-    print("Inserting inbox")
-    insert_dynamodb(dynamodb, inbox_messages_batch)
+        # print("Inserting spam")
+        # insert_dynamodb(dynamodb, spam_messages)
+        # print("Inserted spam")
 
-  # print("Inserted inbox")
+        print("Getting inbox")
+        inbox_messages_batch = extract_msg_contents(
+            batch, label="inbox"
+        )  # the first batch of inbox messages
+
+        print("Inserting inbox")
+        insert_dynamodb(dynamodb, inbox_messages_batch)
+
+    # print("Inserted inbox")
 
 
 def main():
-  lambda_handler(None, None)
+    lambda_handler(None, None)
 
-if __name__ == '__main__':
-  main()
+
+if __name__ == "__main__":
+    main()
