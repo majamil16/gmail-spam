@@ -64,3 +64,15 @@
 ### Other
 
 TODO - decide various ways to explore data (classifying spam category? ex. phishing vs social engineering)
+
+---
+
+## Project Details
+
+### Tests
+
+`python -m gmail_spam.tests.{testfilename}`
+
+### Documentation
+
+Trying to stick to [numpydoc](https://numpydoc.readthedocs.io/en/v1.2.1/example.html#example) format
